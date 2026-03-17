@@ -1,0 +1,997 @@
+import math
+import random
+
+import streamlit as st
+
+
+st.set_page_config(page_title="Roulette Casino", page_icon="🎡", layout="wide")
+
+RED_NUMBERS = {1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36}
+BLACK_NUMBERS = {2, 4, 6, 8, 10, 11, 13, 15, 17, 20, 22, 24, 26, 28, 29, 31, 33, 35}
+WHEEL_ORDER = [
+    0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23,
+    10, 5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26
+]
+TABLE_ROWS = [
+    [3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36],
+    [2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 32, 35],
+    [1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 34],
+]
+OUTSIDE_ORDER = [
+    ["1st Dozen", "2nd Dozen", "3rd Dozen"],
+    ["1-18", "Even", "Red", "Black", "Odd", "19-36"],
+    ["Column 1", "Column 2", "Column 3"],
+]
+OUTSIDE_PAYOUTS = {
+    "Red": 1,
+    "Black": 1,
+    "Even": 1,
+    "Odd": 1,
+    "1-18": 1,
+    "19-36": 1,
+    "1st Dozen": 2,
+    "2nd Dozen": 2,
+    "3rd Dozen": 2,
+    "Column 1": 2,
+    "Column 2": 2,
+    "Column 3": 2,
+}
+OUTSIDE_LABELS = {
+    "1st Dozen": "1-12",
+    "2nd Dozen": "13-24",
+    "3rd Dozen": "25-36",
+    "1-18": "1-18",
+    "Even": "EVEN",
+    "Red": "RED",
+    "Black": "BLACK",
+    "Odd": "ODD",
+    "19-36": "19-36",
+    "Column 1": "COL 1",
+    "Column 2": "COL 2",
+    "Column 3": "COL 3",
+}
+
+
+def init_state() -> None:
+    st.session_state.setdefault("bankroll", 1000)
+    st.session_state.setdefault("straight_stake", 10)
+    st.session_state.setdefault("outside_stake", 20)
+    st.session_state.setdefault("selected_numbers", [])
+    st.session_state.setdefault("selected_outside_bets", [])
+    st.session_state.setdefault("last_number", None)
+    st.session_state.setdefault("last_color", "-")
+    st.session_state.setdefault("last_total_bet", 0)
+    st.session_state.setdefault("last_total_return", 0)
+    st.session_state.setdefault("last_net", 0)
+    st.session_state.setdefault("last_result", "Click on the table to place your bets.")
+    st.session_state.setdefault("history", [])
+    st.session_state.setdefault("wins", 0)
+    st.session_state.setdefault("spins", 0)
+    st.session_state.setdefault("profit", 0)
+    st.session_state.setdefault("simulation_result", None)
+    st.session_state.setdefault("monte_carlo_result", None)
+
+
+def get_color(number: int) -> str:
+    if number == 0:
+        return "Green"
+    if number in RED_NUMBERS:
+        return "Red"
+    return "Black"
+
+
+def spin_wheel() -> int:
+    return random.choice(WHEEL_ORDER)
+
+
+def toggle_number(number: int) -> None:
+    selected = set(st.session_state.selected_numbers)
+    if number in selected:
+        selected.remove(number)
+    else:
+        selected.add(number)
+    st.session_state.selected_numbers = sorted(selected)
+
+
+def toggle_outside(name: str) -> None:
+    selected = list(st.session_state.selected_outside_bets)
+    if name in selected:
+        selected.remove(name)
+    else:
+        selected.append(name)
+    st.session_state.selected_outside_bets = selected
+
+
+def evaluate_outside_bet(name: str, number: int) -> bool:
+    if name == "Red":
+        return number in RED_NUMBERS
+    if name == "Black":
+        return number in BLACK_NUMBERS
+    if name == "Even":
+        return number != 0 and number % 2 == 0
+    if name == "Odd":
+        return number % 2 == 1
+    if name == "1-18":
+        return 1 <= number <= 18
+    if name == "19-36":
+        return 19 <= number <= 36
+    if name == "1st Dozen":
+        return 1 <= number <= 12
+    if name == "2nd Dozen":
+        return 13 <= number <= 24
+    if name == "3rd Dozen":
+        return 25 <= number <= 36
+    if name == "Column 1":
+        return number != 0 and (number - 1) % 3 == 0
+    if name == "Column 2":
+        return number != 0 and (number - 2) % 3 == 0
+    if name == "Column 3":
+        return number != 0 and number % 3 == 0
+    return False
+
+
+def resolve_spin(
+    number: int,
+    straight_numbers: list[int],
+    straight_stake: int,
+    outside_bets: list[str],
+    outside_stake: int,
+) -> tuple[int, list[str], int]:
+    total_return = 0
+    winning_bets: list[str] = []
+    total_bet = len(straight_numbers) * straight_stake + len(outside_bets) * outside_stake
+
+    for selected in straight_numbers:
+        if selected == number:
+            total_return += straight_stake * 36
+            winning_bets.append(f"Number {selected} x35")
+
+    for bet_name in outside_bets:
+        if evaluate_outside_bet(bet_name, number):
+            payout = OUTSIDE_PAYOUTS[bet_name]
+            total_return += outside_stake * (payout + 1)
+            winning_bets.append(f"{OUTSIDE_LABELS[bet_name]} x{payout}")
+
+    return total_return, winning_bets, total_bet
+
+
+def compute_win_probabilities(
+    straight_numbers: list[int],
+    straight_stake: int,
+    outside_bets: list[str],
+    outside_stake: int,
+) -> tuple[float, float, int]:
+    total_bet = len(straight_numbers) * straight_stake + len(outside_bets) * outside_stake
+    if total_bet <= 0:
+        return 0.0, 0.0, 0
+
+    hit_count = 0
+    profit_count = 0
+
+    for number in range(37):
+        total_return, winning_bets, _ = resolve_spin(
+            number,
+            straight_numbers,
+            straight_stake,
+            outside_bets,
+            outside_stake,
+        )
+        if winning_bets:
+            hit_count += 1
+        if total_return - total_bet > 0:
+            profit_count += 1
+
+    return (hit_count / 37) * 100, (profit_count / 37) * 100, total_bet
+
+
+def compute_expected_net_per_spin(
+    straight_numbers: list[int],
+    straight_stake: int,
+    outside_bets: list[str],
+    outside_stake: int,
+) -> tuple[float, float]:
+    total_bet = len(straight_numbers) * straight_stake + len(outside_bets) * outside_stake
+    if total_bet <= 0:
+        return 0.0, 0.0
+
+    total_net = 0.0
+    for number in range(37):
+        total_return, _, _ = resolve_spin(
+            number,
+            straight_numbers,
+            straight_stake,
+            outside_bets,
+            outside_stake,
+        )
+        total_net += (total_return - total_bet)
+
+    expected_net = total_net / 37
+    house_edge_pct = 0.0 if total_bet == 0 else (-expected_net / total_bet) * 100
+    return expected_net, house_edge_pct
+
+
+def strategy_to_bets(
+    strategy: str,
+    current_numbers: list[int],
+    current_outside_bets: list[str],
+    straight_stake: int,
+    outside_stake: int,
+) -> tuple[list[int], list[str], int, int]:
+    if strategy == "Current selection":
+        return current_numbers, current_outside_bets, straight_stake, outside_stake
+    if strategy == "Red only":
+        return [], ["Red"], straight_stake, outside_stake
+    if strategy == "Black only":
+        return [], ["Black"], straight_stake, outside_stake
+    if strategy == "Even only":
+        return [], ["Even"], straight_stake, outside_stake
+    if strategy == "Odd only":
+        return [], ["Odd"], straight_stake, outside_stake
+    if strategy == "Column 1 only":
+        return [], ["Column 1"], straight_stake, outside_stake
+    if strategy == "Column 2 only":
+        return [], ["Column 2"], straight_stake, outside_stake
+    if strategy == "Column 3 only":
+        return [], ["Column 3"], straight_stake, outside_stake
+    return current_numbers, current_outside_bets, straight_stake, outside_stake
+
+
+def calculate_max_drawdown(history: list[int]) -> float:
+    if not history:
+        return 0.0
+    peak = history[0]
+    max_drawdown = 0.0
+    for value in history:
+        if value > peak:
+            peak = value
+        if peak > 0:
+            drawdown = (peak - value) / peak
+            if drawdown > max_drawdown:
+                max_drawdown = drawdown
+    return max_drawdown * 100
+
+
+def calculate_streaks(net_results: list[int]) -> tuple[int, int]:
+    longest_winning = 0
+    longest_losing = 0
+    current_winning = 0
+    current_losing = 0
+
+    for net in net_results:
+        if net > 0:
+            current_winning += 1
+            current_losing = 0
+        else:
+            current_losing += 1
+            current_winning = 0
+
+        if current_winning > longest_winning:
+            longest_winning = current_winning
+        if current_losing > longest_losing:
+            longest_losing = current_losing
+
+    return longest_winning, longest_losing
+
+
+def simulate_games(
+    spins_to_run: int,
+    strategy: str,
+    starting_bankroll: int,
+    current_numbers: list[int],
+    current_outside_bets: list[str],
+    straight_stake: int,
+    outside_stake: int,
+) -> dict[str, float | int | str | list[int] | bool]:
+    straight_numbers, outside_bets, straight_stake, outside_stake = strategy_to_bets(
+        strategy,
+        current_numbers,
+        current_outside_bets,
+        straight_stake,
+        outside_stake,
+    )
+    total_bet = len(straight_numbers) * straight_stake + len(outside_bets) * outside_stake
+
+    bankroll = starting_bankroll
+    hit_spins = 0
+    profitable_spins = 0
+    bankroll_history = [bankroll]
+    actual_spins = 0
+    net_results: list[int] = []
+    total_wagered = 0
+    best_bankroll = bankroll
+    worst_bankroll = bankroll
+
+    if total_bet <= 0:
+        return {
+            "strategy": strategy,
+            "spins": spins_to_run,
+            "actual_spins": 0,
+            "ending_bankroll": bankroll,
+            "net_profit": 0,
+            "hit_rate": 0.0,
+            "profit_rate": 0.0,
+            "average_net": 0.0,
+            "total_bet": total_bet,
+            "total_wagered": 0,
+            "roi": 0.0,
+            "bankroll_history": bankroll_history,
+            "bust": False,
+            "best_bankroll": bankroll,
+            "worst_bankroll": bankroll,
+            "max_drawdown": 0.0,
+            "longest_winning_streak": 0,
+            "longest_losing_streak": 0,
+        }
+
+    for _ in range(spins_to_run):
+        if bankroll < total_bet:
+            break
+
+        number = spin_wheel()
+        total_return, winning_bets, _ = resolve_spin(
+            number,
+            straight_numbers,
+            straight_stake,
+            outside_bets,
+            outside_stake,
+        )
+        net = total_return - total_bet
+
+        bankroll += net
+        total_wagered += total_bet
+        bankroll_history.append(bankroll)
+        net_results.append(net)
+        actual_spins += 1
+
+        if winning_bets:
+            hit_spins += 1
+        if net > 0:
+            profitable_spins += 1
+
+        if bankroll > best_bankroll:
+            best_bankroll = bankroll
+        if bankroll < worst_bankroll:
+            worst_bankroll = bankroll
+
+    denominator = actual_spins if actual_spins > 0 else 1
+    longest_winning_streak, longest_losing_streak = calculate_streaks(net_results)
+    roi = 0.0 if total_wagered == 0 else ((bankroll - starting_bankroll) / total_wagered) * 100
+    max_drawdown = calculate_max_drawdown(bankroll_history)
+
+    return {
+        "strategy": strategy,
+        "spins": spins_to_run,
+        "actual_spins": actual_spins,
+        "ending_bankroll": bankroll,
+        "net_profit": bankroll - starting_bankroll,
+        "hit_rate": (hit_spins / denominator) * 100,
+        "profit_rate": (profitable_spins / denominator) * 100,
+        "average_net": (bankroll - starting_bankroll) / denominator,
+        "total_bet": total_bet,
+        "total_wagered": total_wagered,
+        "roi": roi,
+        "bankroll_history": bankroll_history,
+        "bust": actual_spins < spins_to_run,
+        "best_bankroll": best_bankroll,
+        "worst_bankroll": worst_bankroll,
+        "max_drawdown": max_drawdown,
+        "longest_winning_streak": longest_winning_streak,
+        "longest_losing_streak": longest_losing_streak,
+    }
+
+
+def percentile(sorted_values: list[int], q: float) -> float:
+    if not sorted_values:
+        return 0.0
+    if len(sorted_values) == 1:
+        return float(sorted_values[0])
+
+    position = (len(sorted_values) - 1) * q
+    lower = int(math.floor(position))
+    upper = int(math.ceil(position))
+    if lower == upper:
+        return float(sorted_values[lower])
+
+    weight = position - lower
+    return sorted_values[lower] * (1 - weight) + sorted_values[upper] * weight
+
+
+def run_monte_carlo(
+    num_runs: int,
+    spins_to_run: int,
+    strategy: str,
+    starting_bankroll: int,
+    current_numbers: list[int],
+    current_outside_bets: list[str],
+    straight_stake: int,
+    outside_stake: int,
+) -> dict[str, object]:
+    run_results = []
+    final_bankrolls = []
+    profits = []
+    drawdowns = []
+    bust_count = 0
+    profit_finish_count = 0
+
+    for _ in range(num_runs):
+        result = simulate_games(
+            spins_to_run,
+            strategy,
+            starting_bankroll,
+            current_numbers,
+            current_outside_bets,
+            straight_stake,
+            outside_stake,
+        )
+        run_results.append(result)
+        final_bankrolls.append(int(result["ending_bankroll"]))
+        profits.append(int(result["net_profit"]))
+        drawdowns.append(float(result["max_drawdown"]))
+
+        if result["bust"]:
+            bust_count += 1
+        if int(result["ending_bankroll"]) > starting_bankroll:
+            profit_finish_count += 1
+
+    final_bankrolls_sorted = sorted(final_bankrolls)
+    profits_sorted = sorted(profits)
+
+    average_final_bankroll = sum(final_bankrolls) / len(final_bankrolls) if final_bankrolls else 0.0
+    average_profit = sum(profits) / len(profits) if profits else 0.0
+    average_drawdown = sum(drawdowns) / len(drawdowns) if drawdowns else 0.0
+
+    histogram_data = [{"final_bankroll": value} for value in final_bankrolls]
+    sample_path = []
+    if run_results:
+        sample_path = downsample_history(run_results[0]["bankroll_history"])
+
+    return {
+        "num_runs": num_runs,
+        "average_final_bankroll": average_final_bankroll,
+        "average_profit": average_profit,
+        "average_drawdown": average_drawdown,
+        "bust_probability": (bust_count / num_runs) * 100 if num_runs else 0.0,
+        "profit_finish_probability": (profit_finish_count / num_runs) * 100 if num_runs else 0.0,
+        "min_final_bankroll": min(final_bankrolls) if final_bankrolls else 0,
+        "max_final_bankroll": max(final_bankrolls) if final_bankrolls else 0,
+        "p5_final_bankroll": percentile(final_bankrolls_sorted, 0.05),
+        "p50_final_bankroll": percentile(final_bankrolls_sorted, 0.50),
+        "p95_final_bankroll": percentile(final_bankrolls_sorted, 0.95),
+        "p5_profit": percentile(profits_sorted, 0.05),
+        "p50_profit": percentile(profits_sorted, 0.50),
+        "p95_profit": percentile(profits_sorted, 0.95),
+        "histogram_data": histogram_data,
+        "sample_path": sample_path,
+    }
+
+
+def downsample_history(history: list[int], max_points: int = 500) -> list[dict[str, int]]:
+    indexed = [{"spin": idx, "bankroll": value} for idx, value in enumerate(history)]
+    if len(indexed) <= max_points:
+        return indexed
+    step = max(1, len(indexed) // max_points)
+    sampled = indexed[::step]
+    if sampled[-1]["spin"] != indexed[-1]["spin"]:
+        sampled.append(indexed[-1])
+    return sampled
+
+
+def polar_to_cartesian(cx: float, cy: float, radius: float, angle_deg: float) -> tuple[float, float]:
+    angle_rad = math.radians(angle_deg - 90)
+    return cx + radius * math.cos(angle_rad), cy + radius * math.sin(angle_rad)
+
+
+def build_wheel_svg(winning_number: int | None) -> str:
+    center = 180
+    radius_outer = 168
+    radius_inner = 102
+    angle_step = 360 / len(WHEEL_ORDER)
+    segments = []
+
+    for index, number in enumerate(WHEEL_ORDER):
+        start = index * angle_step
+        end = start + angle_step
+        x1, y1 = polar_to_cartesian(center, center, radius_outer, end)
+        x2, y2 = polar_to_cartesian(center, center, radius_outer, start)
+        x3, y3 = polar_to_cartesian(center, center, radius_inner, start)
+        x4, y4 = polar_to_cartesian(center, center, radius_inner, end)
+
+        fill = "#1da15c" if number == 0 else "#d73a32" if number in RED_NUMBERS else "#101010"
+        stroke = "#f4d37c" if number == winning_number else "rgba(255,255,255,0.2)"
+        stroke_width = 4 if number == winning_number else 1.2
+
+        mid_angle = start + angle_step / 2
+        tx, ty = polar_to_cartesian(center, center, 133, mid_angle)
+
+        segments.append(
+            f"""
+            <path d="M {x1:.2f} {y1:.2f}
+                     A {radius_outer} {radius_outer} 0 0 0 {x2:.2f} {y2:.2f}
+                     L {x3:.2f} {y3:.2f}
+                     A {radius_inner} {radius_inner} 0 0 1 {x4:.2f} {y4:.2f} Z"
+                  fill="{fill}" stroke="{stroke}" stroke-width="{stroke_width}"></path>
+            <text x="{tx:.2f}" y="{ty:.2f}" fill="#fff7d3" font-size="13" font-weight="700"
+                  text-anchor="middle" dominant-baseline="middle">{number}</text>
+            """
+        )
+
+    winner_label = "--" if winning_number is None else str(winning_number)
+    return f"""
+    <svg viewBox="0 0 360 360" width="100%" aria-label="Roulette wheel">
+        <defs>
+            <radialGradient id="felt" cx="50%" cy="45%">
+                <stop offset="0%" stop-color="#2d8b59"></stop>
+                <stop offset="100%" stop-color="#123c2c"></stop>
+            </radialGradient>
+        </defs>
+        <circle cx="180" cy="180" r="178" fill="#6b4b18" stroke="#f2d37b" stroke-width="4"></circle>
+        {''.join(segments)}
+        <circle cx="180" cy="180" r="92" fill="url(#felt)" stroke="#f2d37b" stroke-width="8"></circle>
+        <circle cx="180" cy="180" r="20" fill="#f2d37b"></circle>
+        <polygon points="180,18 192,42 168,42" fill="#f7f0d0" stroke="#765116" stroke-width="2"></polygon>
+        <text x="180" y="170" text-anchor="middle" fill="#fff7d3" font-size="14" opacity="0.85">WINNER</text>
+        <text x="180" y="198" text-anchor="middle" fill="#fff7d3" font-size="34" font-weight="800">{winner_label}</text>
+    </svg>
+    """
+
+
+def add_history_entry(number: int, total_bet: int, total_return: int, winning_bets: list[str]) -> None:
+    st.session_state.history.insert(
+        0,
+        {
+            "number": number,
+            "color": get_color(number),
+            "bet": total_bet,
+            "return": total_return,
+            "net": total_return - total_bet,
+            "winning_bets": winning_bets,
+        },
+    )
+    st.session_state.history = st.session_state.history[:8]
+
+
+def reset_bets() -> None:
+    st.session_state.selected_numbers = []
+    st.session_state.selected_outside_bets = []
+
+
+def reset_game() -> None:
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    init_state()
+
+
+def number_chip_label(number: int) -> str:
+    if number == 0:
+        return f"🟢 {number}"
+    if number in RED_NUMBERS:
+        return f"🔴 {number}"
+    return f"⚫ {number}"
+
+
+def render_number_button(number: int, winning_number: int | None) -> None:
+    color = get_color(number)
+    selected = number in st.session_state.selected_numbers
+    won = number == winning_number
+    label = number_chip_label(number)
+    if selected:
+        label = f"● {label}"
+    if won:
+        label = f"★ {label}"
+    button_type = "primary" if selected or won else "secondary"
+    help_text = f"{color} - click to {'remove' if selected else 'add'} this bet"
+    st.button(
+        label,
+        key=f"num_{number}",
+        use_container_width=True,
+        type=button_type,
+        on_click=toggle_number,
+        args=(number,),
+        help=help_text,
+    )
+
+
+def render_outside_button(name: str) -> None:
+    selected = name in st.session_state.selected_outside_bets
+    label = OUTSIDE_LABELS[name]
+    if selected:
+        label = f"● {label}"
+    button_type = "primary" if selected else "secondary"
+    st.button(
+        label,
+        key=f"outside_{name}",
+        use_container_width=True,
+        type=button_type,
+        on_click=toggle_outside,
+        args=(name,),
+    )
+
+
+init_state()
+
+st.markdown(
+    """
+    <style>
+    .stApp {
+        background:
+            radial-gradient(circle at top, rgba(245, 214, 120, 0.14), transparent 18%),
+            linear-gradient(180deg, #14392b 0%, #0d241b 45%, #07120d 100%);
+        color: #f7f2df;
+    }
+
+    .block-container {
+        max-width: 1400px;
+        padding-top: 2rem;
+    }
+
+    .metric-ribbon {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 14px;
+        margin: 16px 0 18px;
+    }
+
+    .metric-box {
+        padding: 16px;
+        border-radius: 18px;
+        background: linear-gradient(180deg, rgba(255,255,255,0.05), rgba(244, 211, 123, 0.06));
+        border: 1px solid rgba(244, 211, 123, 0.18);
+    }
+
+    .metric-label {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        opacity: 0.68;
+    }
+
+    .metric-value {
+        font-size: 30px;
+        font-weight: 800;
+        margin-top: 4px;
+    }
+
+    div[data-testid="stButton"] > button {
+        min-height: 58px;
+        border-radius: 14px;
+        font-weight: 800;
+        letter-spacing: 0.02em;
+        background: linear-gradient(180deg, #d9b55b, #a87a20);
+        color: #101010 !important;
+        border: 1px solid rgba(255, 233, 159, 0.5);
+        box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
+    }
+
+    div[data-testid="stButton"] > button[kind="primary"] {
+        background: linear-gradient(180deg, #f2d37b, #c89a2a);
+        color: #000000 !important;
+    }
+
+    div[data-testid="stButton"] p {
+        font-size: 23px;
+        font-weight: 800;
+        color: #000000 !important;
+        opacity: 1 !important;
+    }
+
+    [data-testid="stMetricValue"] {
+        color: #ffffff !important;
+    }
+
+    [data-testid="stMetricLabel"] {
+        color: #ffffff !important;
+    }
+
+    label, .stNumberInput label, .stSelectbox label, .stTextInput label, .stTextArea label {
+        color: #ffffff !important;
+        opacity: 1 !important;
+    }
+
+    .section-label {
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+        opacity: 0.85;
+        margin: 18px 0 10px;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+rate = 0 if st.session_state.spins == 0 else round((st.session_state.wins / st.session_state.spins) * 100)
+
+st.title("Roulette Casino")
+
+st.markdown(
+    f"""
+    <div class="metric-ribbon">
+        <div class="metric-box"><div class="metric-label">Bankroll</div><div class="metric-value">{st.session_state.bankroll}</div></div>
+        <div class="metric-box"><div class="metric-label">Spins</div><div class="metric-value">{st.session_state.spins}</div></div>
+        <div class="metric-box"><div class="metric-label">Win Rate</div><div class="metric-value">{rate}%</div></div>
+        <div class="metric-box"><div class="metric-label">Net Profit</div><div class="metric-value">{st.session_state.profit:+d}</div></div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.subheader("Betting Table")
+
+stake_col1, stake_col2 = st.columns(2)
+with stake_col1:
+    st.number_input("Stake per number", min_value=1, step=1, key="straight_stake")
+with stake_col2:
+    st.number_input("Stake per outside bet", min_value=1, step=1, key="outside_stake")
+
+st.markdown("<div class='section-label'>Straight Numbers</div>", unsafe_allow_html=True)
+zero_row = st.columns(13, gap="small")
+with zero_row[0]:
+    render_number_button(0, st.session_state.last_number)
+for row in TABLE_ROWS:
+    cols = st.columns(13, gap="small")
+    for idx, number in enumerate(row, start=1):
+        with cols[idx]:
+            render_number_button(number, st.session_state.last_number)
+
+st.markdown("<div class='section-label'>Outside Bets</div>", unsafe_allow_html=True)
+for row in OUTSIDE_ORDER:
+    cols = st.columns(len(row), gap="small")
+    for idx, name in enumerate(row):
+        with cols[idx]:
+            render_outside_button(name)
+
+current_total = (
+    len(st.session_state.selected_numbers) * int(st.session_state.straight_stake)
+    + len(st.session_state.selected_outside_bets) * int(st.session_state.outside_stake)
+)
+hit_probability, profit_probability, _ = compute_win_probabilities(
+    list(st.session_state.selected_numbers),
+    int(st.session_state.straight_stake),
+    list(st.session_state.selected_outside_bets),
+    int(st.session_state.outside_stake),
+)
+expected_net, house_edge_pct = compute_expected_net_per_spin(
+    list(st.session_state.selected_numbers),
+    int(st.session_state.straight_stake),
+    list(st.session_state.selected_outside_bets),
+    int(st.session_state.outside_stake),
+)
+
+st.caption(
+    f"Selected numbers: {len(st.session_state.selected_numbers)} | "
+    f"Outside bets: {len(st.session_state.selected_outside_bets)} | "
+    f"Total bet: {current_total}"
+)
+
+prob_col1, prob_col2, prob_col3, prob_col4 = st.columns(4)
+with prob_col1:
+    st.metric("Win Probability", f"{hit_probability:.1f}%")
+with prob_col2:
+    st.metric("Profit Probability", f"{profit_probability:.1f}%")
+with prob_col3:
+    st.metric("Expected Net / Spin", f"{expected_net:+.2f}")
+with prob_col4:
+    st.metric("House Edge on Bet", f"{house_edge_pct:.2f}%")
+
+action_col1, action_col2, action_col3 = st.columns(3)
+with action_col1:
+    spin_clicked = st.button("Spin Wheel", use_container_width=True, type="primary")
+with action_col2:
+    if st.button("Clear Bets", use_container_width=True):
+        reset_bets()
+        st.rerun()
+with action_col3:
+    if st.button("Reset Game", use_container_width=True):
+        reset_game()
+        st.rerun()
+
+if spin_clicked:
+    straight_numbers = list(st.session_state.selected_numbers)
+    outside_bets = list(st.session_state.selected_outside_bets)
+    straight_stake = int(st.session_state.straight_stake)
+    outside_stake = int(st.session_state.outside_stake)
+    total_bet = len(straight_numbers) * straight_stake + len(outside_bets) * outside_stake
+
+    if total_bet <= 0:
+        st.session_state.last_result = "No bets selected."
+    elif total_bet > st.session_state.bankroll:
+        st.session_state.last_result = "Insufficient bankroll to cover all bets."
+    else:
+        winning_number = spin_wheel()
+        total_return, winning_bets, total_bet = resolve_spin(
+            winning_number,
+            straight_numbers,
+            straight_stake,
+            outside_bets,
+            outside_stake,
+        )
+        net = total_return - total_bet
+
+        st.session_state.bankroll += net
+        st.session_state.last_number = winning_number
+        st.session_state.last_color = get_color(winning_number)
+        st.session_state.last_total_bet = total_bet
+        st.session_state.last_total_return = total_return
+        st.session_state.last_net = net
+        st.session_state.spins += 1
+        st.session_state.profit += net
+        if net > 0:
+            st.session_state.wins += 1
+
+        if winning_bets:
+            st.session_state.last_result = (
+                f"{winning_number} ({st.session_state.last_color.lower()}) hits. "
+                f"Winning bets: {', '.join(winning_bets)}. Net: {net:+d}."
+            )
+        else:
+            st.session_state.last_result = (
+                f"{winning_number} ({st.session_state.last_color.lower()}) hits. "
+                f"No winning bets. Net: {net:+d}."
+            )
+
+        add_history_entry(winning_number, total_bet, total_return, winning_bets)
+        st.rerun()
+
+st.subheader("Result")
+
+if st.session_state.last_number is None:
+    st.info("No spin yet.")
+else:
+    badge_color = {"Red": "#d73a32", "Black": "#101010", "Green": "#1da15c"}[st.session_state.last_color]
+    st.markdown(
+        f"""
+        <div style="padding:16px 0 8px;">
+            <div style="display:flex;align-items:center;gap:14px;">
+                <div style="width:72px;height:72px;border-radius:50%;display:grid;place-items:center;
+                            background:{badge_color};color:white;font-size:30px;font-weight:800;border:2px solid #f4d37b;">
+                    {st.session_state.last_number}
+                </div>
+                <div>
+                    <div style="font-size:14px;opacity:0.7;">Latest result</div>
+                    <div style="font-size:24px;font-weight:800;">{st.session_state.last_color}</div>
+                    <div style="opacity:0.85;">{st.session_state.last_result}</div>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        f"Total bet: {st.session_state.last_total_bet} | "
+        f"Return: {st.session_state.last_total_return} | "
+        f"Net: {st.session_state.last_net:+d}"
+    )
+
+st.subheader("Single Simulation")
+
+sim_col1, sim_col2, sim_col3 = st.columns(3)
+with sim_col1:
+    simulation_strategy = st.selectbox(
+        "Strategy",
+        [
+            "Current selection",
+            "Red only",
+            "Black only",
+            "Even only",
+            "Odd only",
+            "Column 1 only",
+            "Column 2 only",
+            "Column 3 only",
+        ],
+    )
+with sim_col2:
+    simulation_spins = st.number_input("Spins", min_value=100, max_value=100000, value=10000, step=100)
+with sim_col3:
+    simulation_bankroll = st.number_input("Starting bankroll", min_value=1, value=1000, step=100)
+
+if st.button("Run Single Simulation", use_container_width=True):
+    st.session_state.simulation_result = simulate_games(
+        int(simulation_spins),
+        simulation_strategy,
+        int(simulation_bankroll),
+        list(st.session_state.selected_numbers),
+        list(st.session_state.selected_outside_bets),
+        int(st.session_state.straight_stake),
+        int(st.session_state.outside_stake),
+    )
+
+if st.session_state.simulation_result:
+    sim = st.session_state.simulation_result
+    bust_text = " | Stopped early: bankroll too low" if sim["bust"] else ""
+    st.caption(
+        f"Strategy: {sim['strategy']} | Bet per spin: {sim['total_bet']} | "
+        f"Executed spins: {sim['actual_spins']}/{sim['spins']}{bust_text}"
+    )
+
+    sim_metric1, sim_metric2, sim_metric3, sim_metric4 = st.columns(4)
+    with sim_metric1:
+        st.metric("Ending bankroll", int(sim["ending_bankroll"]))
+    with sim_metric2:
+        st.metric("Net profit", f"{int(sim['net_profit']):+d}")
+    with sim_metric3:
+        st.metric("Hit rate", f"{sim['hit_rate']:.1f}%")
+    with sim_metric4:
+        st.metric("Profit rate", f"{sim['profit_rate']:.1f}%")
+
+    sim_metric5, sim_metric6, sim_metric7, sim_metric8 = st.columns(4)
+    with sim_metric5:
+        st.metric("ROI", f"{sim['roi']:+.2f}%")
+    with sim_metric6:
+        st.metric("Best bankroll", int(sim["best_bankroll"]))
+    with sim_metric7:
+        st.metric("Worst bankroll", int(sim["worst_bankroll"]))
+    with sim_metric8:
+        st.metric("Max drawdown", f"{sim['max_drawdown']:.1f}%")
+
+    sim_metric9, sim_metric10, sim_metric11 = st.columns(3)
+    with sim_metric9:
+        st.metric("Average net / spin", f"{sim['average_net']:+.2f}")
+    with sim_metric10:
+        st.metric("Longest win streak", int(sim["longest_winning_streak"]))
+    with sim_metric11:
+        st.metric("Longest losing streak", int(sim["longest_losing_streak"]))
+
+    chart_history = downsample_history(sim["bankroll_history"])
+    st.line_chart(chart_history, x="spin", y="bankroll", height=280)
+
+st.subheader("Monte Carlo Analysis")
+
+mc_col1, mc_col2 = st.columns(2)
+with mc_col1:
+    monte_carlo_runs = st.number_input("Number of Monte Carlo runs", min_value=100, max_value=5000, value=1000, step=100)
+with mc_col2:
+    st.write("")
+    st.write("")
+    monte_carlo_clicked = st.button("Run Monte Carlo Analysis", use_container_width=True)
+
+if monte_carlo_clicked:
+    st.session_state.monte_carlo_result = run_monte_carlo(
+        int(monte_carlo_runs),
+        int(simulation_spins),
+        simulation_strategy,
+        int(simulation_bankroll),
+        list(st.session_state.selected_numbers),
+        list(st.session_state.selected_outside_bets),
+        int(st.session_state.straight_stake),
+        int(st.session_state.outside_stake),
+    )
+
+if st.session_state.monte_carlo_result:
+    mc = st.session_state.monte_carlo_result
+
+    st.caption(
+        f"Monte Carlo summary for {mc['num_runs']} runs of {int(simulation_spins)} spins each "
+        f"using strategy '{simulation_strategy}'."
+    )
+
+    mc_metric1, mc_metric2, mc_metric3, mc_metric4 = st.columns(4)
+    with mc_metric1:
+        st.metric("Avg final bankroll", f"{mc['average_final_bankroll']:.2f}")
+    with mc_metric2:
+        st.metric("Avg net profit", f"{mc['average_profit']:+.2f}")
+    with mc_metric3:
+        st.metric("Bust probability", f"{mc['bust_probability']:.1f}%")
+    with mc_metric4:
+        st.metric("Finish in profit", f"{mc['profit_finish_probability']:.1f}%")
+
+    mc_metric5, mc_metric6, mc_metric7, mc_metric8 = st.columns(4)
+    with mc_metric5:
+        st.metric("Min final bankroll", int(mc["min_final_bankroll"]))
+    with mc_metric6:
+        st.metric("5th percentile", f"{mc['p5_final_bankroll']:.1f}")
+    with mc_metric7:
+        st.metric("Median final bankroll", f"{mc['p50_final_bankroll']:.1f}")
+    with mc_metric8:
+        st.metric("95th percentile", f"{mc['p95_final_bankroll']:.1f}")
+
+    mc_metric9, mc_metric10 = st.columns(2)
+    with mc_metric9:
+        st.metric("Max final bankroll", int(mc["max_final_bankroll"]))
+    with mc_metric10:
+        st.metric("Average max drawdown", f"{mc['average_drawdown']:.1f}%")
+
+    st.markdown("**Distribution of Final Bankrolls**")
+    st.bar_chart(mc["histogram_data"], x="final_bankroll")
+
+    st.markdown("**Sample Bankroll Path from One Monte Carlo Run**")
+    st.line_chart(mc["sample_path"], x="spin", y="bankroll", height=280)
